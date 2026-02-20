@@ -1,0 +1,91 @@
+# ===================================================================
+# Multi-Task Model Distillation Configuration
+# ===================================================================
+
+# --- Teacher model ---
+teacher:
+  backbone:
+    name: resnet101
+    pretrained: true
+    frozen_stages: 0
+  heads:
+    seg:
+      type: fpn_seg_head
+      num_classes: 19
+      mid_channels: 256
+    det:
+      type: anchor_free_det_head
+      num_classes: 80
+      mid_channels: 256
+      num_convs: 4
+      input_keys: ["s3", "s4", "s5"]
+  # Path to pretrained teacher checkpoint (set to null to skip)
+  checkpoint: null
+
+# --- Student model ---
+student:
+  backbone:
+    name: resnet18
+    pretrained: true
+    frozen_stages: 0
+  heads:
+    seg:
+      type: fpn_seg_head
+      num_classes: 19
+      mid_channels: 128
+    det:
+      type: anchor_free_det_head
+      num_classes: 80
+      mid_channels: 128
+      num_convs: 4
+      input_keys: ["s3", "s4", "s5"]
+
+# --- Feature distillation ---
+feature_distill:
+  weight: 1.0
+  feature_keys: ["s3", "s4", "s5"]
+  aligner_type: conv1x1
+  loss_type: mse_feature_loss
+  loss_weights: [1.0, 1.0, 1.0]
+
+# --- Logit distillation ---
+logit_distill:
+  seg:
+    loss_type: seg_kd_loss
+    weight: 2.0
+    temperature: 4.0
+  det:
+    loss_type: det_kd_loss
+    weight: 2.0
+    temperature: 4.0
+
+# --- Cross-head prediction ---
+cross_head:
+  seg:
+    loss_type: mse_feature_loss
+    weight: 0.5
+  det:
+    loss_type: mse_feature_loss
+    weight: 0.5
+
+# --- Task losses (supervised) ---
+task_loss:
+  seg:
+    loss_type: seg_ce_loss
+    weight: 1.0
+    ignore_index: 255
+
+# --- Training ---
+training:
+  epochs: 100
+  batch_size: 8
+  lr: 0.01
+  weight_decay: 0.0001
+  lr_scheduler: cosine
+  warmup_epochs: 5
+  active_heads: null  # null = all heads; or ["seg"], ["det"], ["seg", "det"]
+
+# --- Data ---
+data:
+  image_size: [512, 512]
+  num_workers: 4
