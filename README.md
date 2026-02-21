@@ -1,3 +1,4 @@
+# jinyan add 20260221
 # Multi-Task Model Distillation Framework
 
 灵活的多任务模型蒸馏框架，支持语义分割和目标检测模型的知识蒸馏，可自由切换预测头并进行局部特征层对齐。
