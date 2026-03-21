@@ -1,0 +1,29 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(wc -l panorama_stitching/*.py video_stabilization/*.py calibration_algorithms/*/*.py)",
+      "Bash(find F:/project/test -name *.py -not -path */venv/* -not -path */__pycache__/*)",
+      "Bash(python -c \"import hdr_imaging; print\\(hdr_imaging.__version__\\)\")",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(python -c \":*)",
+      "Bash(py -c \"import numpy; print\\(numpy.__version__\\)\")",
+      "Read(//c/Users/60989/AppData/Local/Programs/Python//**)",
+      "Read(//c/Users/60989/AppData/Local//**)",
+      "Bash(find /c/Users/60989 -path */site-packages/numpy -type d)",
+      "Bash(/c/Users/60989/AppData/Local/conda/conda --version)",
+      "Bash(ls /c/Python*)",
+      "Bash(ls /d)",
+      "Bash(python -m pip list)",
+      "Bash(ls /f/project/test/*.txt)",
+      "Bash(ls /f/project/test/*.toml)",
+      "Bash(git -C /f/project/test log --oneline)",
+      "Bash(git -C /f/project/test show b94c5bf --stat)",
+      "Bash(pip install:*)",
+      "Bash(python -c \"from hdr_imaging.alignment import MTBAlignment, FeatureAlignment; print\\(''alignment OK''\\)\")",
+      "Bash(python demo_hdr.py --test)",
+      "Bash(pip show:*)",
+      "Bash(python demo_hdr.py --compare)"
+    ]
+  }
+}

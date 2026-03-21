@@ -10,7 +10,8 @@
 2. [相机标定 —— Zhang 方法](#2-相机标定--zhang-方法)
 3. [LiDAR-相机外参标定 —— PnP 方法](#3-lidar-相机外参标定--pnp-方法)
 4. [手眼标定 —— AX=XB 问题](#4-手眼标定--axxb-问题)
-5. [参考文献](#5-参考文献)
+5. [镜头畸变矫正](#5-镜头畸变矫正)
+6. [参考文献](#6-参考文献)
 
 ---
 
@@ -585,7 +586,236 @@ $$
 
 ---
 
-## 5. 参考文献
+## 5. 镜头畸变矫正
+
+### 5.1 常规镜头畸变矫正
+
+#### 5.1.1 畸变模型回顾
+
+OpenCV 的常规畸变模型包含径向畸变和切向畸变（详见第 1.3 节），完整公式为：
+
+$$
+\begin{aligned}
+x' &= x \cdot (1 + k_1 r^2 + k_2 r^4 + k_3 r^6) + 2p_1 xy + p_2(r^2 + 2x^2) \\
+y' &= y \cdot (1 + k_1 r^2 + k_2 r^4 + k_3 r^6) + p_1(r^2 + 2y^2) + 2p_2 xy
+\end{aligned}
+$$
+
+其中 $(x, y)$ 是无畸变的归一化坐标，$(x', y')$ 是畸变后的归一化坐标。
+
+#### 5.1.2 去畸变的逆问题
+
+去畸变是畸变的逆过程：已知畸变坐标 $(x', y')$，求解原始坐标 $(x, y)$。
+
+然而畸变方程是关于 $(x, y)$ 的高次多项式，没有解析逆。OpenCV 使用**固定点迭代法**（Fixed-Point Iteration）求解：
+
+$$
+\begin{aligned}
+x^{(0)} &= x' \\
+y^{(0)} &= y' \\
+x^{(k+1)} &= \frac{x' - [2p_1 x^{(k)} y^{(k)} + p_2(r_k^2 + 2(x^{(k)})^2)]}{1 + k_1 r_k^2 + k_2 r_k^4 + k_3 r_k^6} \\
+y^{(k+1)} &= \frac{y' - [p_1(r_k^2 + 2(y^{(k)})^2) + 2p_2 x^{(k)} y^{(k)}]}{1 + k_1 r_k^2 + k_2 r_k^4 + k_3 r_k^6}
+\end{aligned}
+$$
+
+其中 $r_k^2 = (x^{(k)})^2 + (y^{(k)})^2$。通常 5-10 次迭代即可收敛。
+
+#### 5.1.3 图像去畸变的实现原理
+
+图像去畸变使用**反向映射**（Inverse Mapping）：
+
+1. 对输出图像（去畸变后）的每个像素 $(u_{dst}, v_{dst})$：
+   - 通过新内参矩阵 $\mathbf{K}_{new}$ 得到归一化坐标 $(x, y)$
+   - 施加畸变模型得到 $(x', y')$
+   - 通过原始内参矩阵 $\mathbf{K}$ 得到在畸变图像中的像素坐标 $(u_{src}, v_{src})$
+2. 使用双线性或双三次插值从畸变图像中采样得到输出像素值
+
+数学表达：
+
+$$
+\begin{bmatrix} u_{src} \\ v_{src} \end{bmatrix} = \text{distort}\left(\mathbf{K}_{new}^{-1} \begin{bmatrix} u_{dst} \\ v_{dst} \\ 1 \end{bmatrix}\right) \cdot \mathbf{K}
+$$
+
+#### 5.1.4 映射表方法（cv2.remap）
+
+为了高效处理视频流，可以预计算映射表：
+
+$$
+\text{map}_x(u_{dst}, v_{dst}) = u_{src}, \quad \text{map}_y(u_{dst}, v_{dst}) = v_{src}
+$$
+
+映射表只需计算一次（`cv2.initUndistortRectifyMap()`），之后对每帧图像只需执行 `cv2.remap()` 即可，计算量大幅降低。
+
+#### 5.1.5 新内参矩阵与 alpha 参数
+
+`cv2.getOptimalNewCameraMatrix()` 根据 alpha 参数计算去畸变后的最优内参 $\mathbf{K}_{new}$：
+
+- $\alpha = 0$：裁剪所有无效黑色区域
+  $$\mathbf{K}_{new} \text{ 使得输出图像所有像素均有效}$$
+- $\alpha = 1$：保留所有原始像素
+  $$\mathbf{K}_{new} \text{ 使得原始图像的所有像素都映射到输出}$$
+- $0 < \alpha < 1$：在两者之间线性插值
+
+#### 5.1.6 特征点去畸变
+
+`cv2.undistortPoints()` 直接将畸变的 2D 点坐标矫正为无畸变坐标，无需生成完整图像。内部使用上述固定点迭代法。
+
+输入畸变像素坐标 $(u_d, v_d)$，输出取决于参数：
+- 若提供 $\mathbf{P}$：输出像素坐标 $(u, v)$
+- 若不提供 $\mathbf{P}$：输出归一化坐标 $(x, y)$
+
+### 5.2 鱼眼镜头畸变模型
+
+#### 5.2.1 鱼眼投影模型
+
+鱼眼镜头使用不同于针孔模型的投影方式。常见的鱼眼投影模型：
+
+| 模型名称 | 投影方程 | 特点 |
+|----------|----------|------|
+| 等距投影（Equidistant） | $r = f \cdot \theta$ | 最常用，OpenCV 采用此模型 |
+| 等立体角投影（Equisolid Angle） | $r = 2f \cdot \sin(\theta/2)$ | 保持立体角比例 |
+| 体视投影（Stereographic） | $r = 2f \cdot \tan(\theta/2)$ | 保持局部形状（共形） |
+| 正交投影（Orthographic） | $r = f \cdot \sin(\theta)$ | 视场角最大可达 180° |
+| 透视投影（Pinhole） | $r = f \cdot \tan(\theta)$ | 常规镜头，$\theta \to 90°$ 时 $r \to \infty$ |
+
+其中 $\theta$ 是入射光线与光轴的夹角，$r$ 是像点到主点的距离，$f$ 是焦距。
+
+**鱼眼 vs 针孔的关键区别**：当 $\theta$ 接近 $90°$ 时，针孔模型的 $r = f \tan\theta \to \infty$，而等距模型的 $r = f\theta$ 保持有限，因此鱼眼可以捕捉 $180°$ 甚至更大的视场。
+
+#### 5.2.2 Kannala-Brandt 模型（OpenCV 鱼眼模型）
+
+OpenCV 的 `cv2.fisheye` 模块使用 Kannala-Brandt（2006）提出的通用鱼眼模型：
+
+$$
+\theta_d = \theta + k_1 \theta^3 + k_2 \theta^5 + k_3 \theta^7 + k_4 \theta^9
+$$
+
+等价形式：
+
+$$
+\theta_d = \theta \cdot (1 + k_1 \theta^2 + k_2 \theta^4 + k_3 \theta^6 + k_4 \theta^8)
+$$
+
+其中：
+- $\theta = \arctan\left(\sqrt{x^2 + y^2}\right)$ 是入射角
+- $\theta_d$ 是畸变后的角度
+- $k_1, k_2, k_3, k_4$ 是鱼眼畸变系数
+
+**注意**：与常规模型不同，鱼眼模型**没有切向畸变参数** $p_1, p_2$。
+
+#### 5.2.3 鱼眼投影完整流程
+
+给定世界坐标系中的 3D 点 $\mathbf{P}_w$：
+
+**步骤 1**：世界坐标 → 相机坐标
+
+$$
+\mathbf{P}_c = \mathbf{R} \mathbf{P}_w + \mathbf{t} = \begin{bmatrix} X_c \\ Y_c \\ Z_c \end{bmatrix}
+$$
+
+**步骤 2**：计算归一化坐标和入射角
+
+$$
+x = X_c / Z_c, \quad y = Y_c / Z_c, \quad r = \sqrt{x^2 + y^2}, \quad \theta = \arctan(r)
+$$
+
+**步骤 3**：施加鱼眼畸变
+
+$$
+\theta_d = \theta (1 + k_1 \theta^2 + k_2 \theta^4 + k_3 \theta^6 + k_4 \theta^8)
+$$
+
+**步骤 4**：计算畸变后的归一化坐标
+
+$$
+x_d = \frac{\theta_d}{r} \cdot x, \quad y_d = \frac{\theta_d}{r} \cdot y
+$$
+
+当 $r \to 0$ 时，$\theta_d / r \to 1$（洛必达法则）。
+
+**步骤 5**：像素坐标
+
+$$
+u = f_x \cdot x_d + c_x, \quad v = f_y \cdot y_d + c_y
+$$
+
+#### 5.2.4 鱼眼去畸变
+
+鱼眼去畸变同样是求逆过程：已知 $\theta_d$，求解 $\theta$。
+
+$$
+\theta_d = \theta + k_1 \theta^3 + k_2 \theta^5 + k_3 \theta^7 + k_4 \theta^9
+$$
+
+这是一个 9 次多项式方程，OpenCV 使用**牛顿迭代法**求解：
+
+$$
+\theta^{(n+1)} = \theta^{(n)} - \frac{f(\theta^{(n)})}{f'(\theta^{(n)})}
+$$
+
+其中：
+
+$$
+f(\theta) = \theta + k_1\theta^3 + k_2\theta^5 + k_3\theta^7 + k_4\theta^9 - \theta_d
+$$
+
+$$
+f'(\theta) = 1 + 3k_1\theta^2 + 5k_2\theta^4 + 7k_3\theta^6 + 9k_4\theta^8
+$$
+
+初始值 $\theta^{(0)} = \theta_d$，通常 5-10 次迭代收敛。
+
+#### 5.2.5 鱼眼标定方法
+
+`cv2.fisheye.calibrate()` 的标定流程与常规标定类似，但使用鱼眼投影模型：
+
+1. 准备棋盘格的 3D 坐标和检测到的 2D 角点
+2. 对每个视角，通过鱼眼模型建立 3D→2D 的投影方程
+3. 初始化内参估计
+4. 使用 Levenberg-Marquardt 最小化重投影误差：
+
+$$
+\min_{\mathbf{K}, k_1 \sim k_4, \{\mathbf{R}_i, \mathbf{t}_i\}} \sum_{i=1}^{n} \sum_{j=1}^{m} \| \mathbf{m}_{ij} - \pi_{fisheye}(\mathbf{K}, k_1 \sim k_4, \mathbf{R}_i, \mathbf{t}_i, \mathbf{M}_j) \|^2
+$$
+
+标定 flags 说明：
+
+| Flag | 作用 |
+|------|------|
+| `CALIB_RECOMPUTE_EXTRINSIC` | 每次内参更新后重新估计外参 |
+| `CALIB_CHECK_COND` | 检查条件数，避免数值不稳定 |
+| `CALIB_FIX_SKEW` | 固定倾斜因子 $\gamma = 0$ |
+| `CALIB_FIX_K1`~`CALIB_FIX_K4` | 分别固定 $k_1$~$k_4$ |
+
+#### 5.2.6 鱼眼去畸变的视场控制
+
+通过调整新内参矩阵 $\mathbf{K}_{new}$ 的焦距，可以控制去畸变后的视场角：
+
+- **$f_{new} = f_{original}$**：标准去畸变，视场角约为原始鱼眼的一半
+- **$f_{new} < f_{original}$**：缩小焦距，保留更大视场（但分辨率降低）
+- **$f_{new} > f_{original}$**：增大焦距，只保留中心高分辨率区域
+
+输出图像的视场角近似为：
+
+$$
+\text{FOV}_{out} \approx 2 \arctan\left(\frac{w/2}{f_{new}}\right)
+$$
+
+### 5.3 常规 vs 鱼眼 API 对比
+
+| 功能 | 常规镜头 | 鱼眼镜头 |
+|------|----------|----------|
+| 标定 | `cv2.calibrateCamera()` | `cv2.fisheye.calibrate()` |
+| 去畸变图像 | `cv2.undistort()` | `cv2.fisheye.undistortImage()` |
+| 映射表 | `cv2.initUndistortRectifyMap()` | `cv2.fisheye.initUndistortRectifyMap()` |
+| 去畸变点 | `cv2.undistortPoints()` | `cv2.fisheye.undistortPoints()` |
+| 畸变参数 | $k_1, k_2, p_1, p_2, k_3$ (5个) | $k_1, k_2, k_3, k_4$ (4个) |
+| 畸变变量 | 像点距离 $r$ | 入射角 $\theta$ |
+| 适用 FOV | $< 90°$ | $> 120°$（可达 $180°+$） |
+
+---
+
+## 6. 参考文献
 
 1. **Zhang, Z.** (2000). "A Flexible New Technique for Camera Calibration." *IEEE Transactions on Pattern Analysis and Machine Intelligence*, 22(11), 1330-1334.
 
@@ -603,6 +833,16 @@ $$
 
 8. **Hartley, R. and Zisserman, A.** (2003). *Multiple View Geometry in Computer Vision.* Cambridge University Press.
 
-9. **OpenCV 官方文档**: https://docs.opencv.org/4.x/d9/d0c/group__calib3d.html
+9. **Kannala, J. and Brandt, S.S.** (2006). "A Generic Camera Model and Calibration Method for Conventional, Wide-Angle, and Fish-Eye Lenses." *IEEE Transactions on Pattern Analysis and Machine Intelligence*, 28(8), 1335-1340.
 
-10. **KITTI 数据集**: https://www.cvlibs.net/datasets/kitti/ (LiDAR-相机标定参考数据)
+10. **Brown, D.C.** (1966). "Decentering Distortion of Lenses." *Photogrammetric Engineering*, 32(3), 444-462. （径向/切向畸变模型的经典论文）
+
+11. **OpenCV 官方文档 — calib3d 模块**: https://docs.opencv.org/4.x/d9/d0c/group__calib3d.html
+
+12. **OpenCV 官方文档 — fisheye 模块**: https://docs.opencv.org/4.x/db/d58/group__calib3d__fisheye.html
+
+13. **OpenCV 相机标定教程**: https://docs.opencv.org/4.x/dc/dbb/tutorial_py_calibration.html
+
+14. **KITTI 数据集**: https://www.cvlibs.net/datasets/kitti/ （LiDAR-相机标定参考数据）
+
+15. **KITTI-360 数据集**: https://www.cvlibs.net/datasets/kitti-360/ （包含鱼眼相机数据）
