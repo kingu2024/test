@@ -3,4 +3,5 @@ __pycache__/
 *.pyo
 output_panorama/
 output_stabilization/
+output_hdr/
 *.mp4
