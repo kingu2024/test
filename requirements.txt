@@ -1,0 +1,21 @@
+# 全景拼接与视频防抖算法依赖包
+# Panorama Stitching & Video Stabilization Dependencies
+
+# 核心计算机视觉库
+opencv-python>=4.8.0        # OpenCV: SIFT/ORB/AKAZE特征检测, 光流估计, 图像变换
+opencv-contrib-python>=4.8.0 # OpenCV扩展模块 (包含SIFT等额外特征检测器)
+
+# 科学计算
+numpy>=1.24.0               # 矩阵运算, 向量化计算, FFT分析
+
+# 可选依赖（用于可视化和分析）
+matplotlib>=3.7.0           # 绘制轨迹分析图, 结果可视化
+scipy>=1.10.0               # 信号处理（高斯滤波, FFT分析）
+
+# 可选: 深度学习特征提取（如需集成SuperPoint等深度特征）
+# torch>=2.0.0
+# torchvision>=0.15.0
+
+# 开发工具（可选）
+# jupyter>=1.0.0            # Jupyter Notebook 交互演示
+# tqdm>=4.65.0              # 进度条显示
