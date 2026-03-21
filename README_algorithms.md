@@ -238,6 +238,12 @@ python demo_stabilization.py --input my_video.mp4 --smooth kalman
 - Liu et al., "Subspace Video Stabilization" SIGGRAPH (2011) - L1优化
 - Rauch-Tung-Striebel Smoother - 双向卡尔曼平滑理论
 
+---
+
+## HDR 高动态范围成像
+
+HDR 成像算法的完整文档请参见 [README_HDR.md](README_HDR.md)。
+
 Sources:
 - [Real-Time Industrial Panorama Stitching (PMC 2025)](https://pmc.ncbi.nlm.nih.gov/articles/PMC12788332/)
 - [PAIC-Net (Springer 2024)](https://link.springer.com/article/10.1007/s40747-024-01702-x)
