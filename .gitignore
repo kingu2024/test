@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+*.pyo
+output_panorama/
+output_stabilization/
+*.mp4
