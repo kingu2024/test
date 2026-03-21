@@ -6,6 +6,8 @@
 
 采用混合实现策略：核心算法手动 NumPy 实现（含详细中文数学注释），同时提供 OpenCV 内置版本作为参考对比。
 
+**关于子包结构的说明：** 现有模块（panorama_stitching、video_stabilization）使用扁平文件布局。HDR 模块由于算法数量多（仅色调映射就有 10 种），采用子包结构以保持每个文件聚焦。这是经过评估后的有意选择，不影响外部 API 的使用方式。
+
 ## 模块结构
 
 ```
@@ -33,14 +35,47 @@ hdr_imaging/
 ├── single_image/                  # 单张图像 HDR
 │   ├── __init__.py
 │   └── single_image_hdr.py        # CLAHE + 局部色调映射 + 自适应增强
-├── hdr_pipeline.py                # 主控流水线，串联各子模块
-└── docs/
-    └── hdr_math_principles.md     # 数学原理文档
+└── hdr_pipeline.py                # 主控流水线，串联各子模块
 ```
 
 顶层新增文件：
 - `demo_hdr.py` — HDR 演示脚本
 - `README_HDR.md` — HDR 模块完整中文说明文档
+- `hdr_imaging/docs/hdr_math_principles.md` — 数学原理文档（与 calibration_algorithms/docs/ 结构一致）
+
+### __init__.py 导出规范
+
+根包 `hdr_imaging/__init__.py` 遵循现有模块模式：
+```python
+"""
+HDR 高动态范围成像算法库 / HDR Imaging Algorithm Library
+"""
+from .hdr_pipeline import HDRPipeline
+from .alignment import MTBAlignment, FeatureAlignment
+from .calibration import DebevecCalibration, RobertsonCalibration
+from .merge import HDRMerge
+from .tone_mapping import (ReinhardGlobal, ReinhardLocal, DragoToneMap,
+                           DurandToneMap, FattalToneMap, AdaptiveLog,
+                           ACESToneMap, FilmicToneMap, MantiukToneMap,
+                           HistogramToneMap)
+from .exposure_fusion import MertensFusion
+from .single_image import SingleImageHDR
+
+__all__ = ['HDRPipeline', 'MTBAlignment', 'FeatureAlignment',
+           'DebevecCalibration', 'RobertsonCalibration', 'HDRMerge',
+           'ReinhardGlobal', 'ReinhardLocal', 'DragoToneMap',
+           'DurandToneMap', 'FattalToneMap', 'AdaptiveLog',
+           'ACESToneMap', 'FilmicToneMap', 'MantiukToneMap',
+           'HistogramToneMap', 'MertensFusion', 'SingleImageHDR']
+__version__ = '1.0.0'
+__author__ = 'Computer Vision Algorithm Library'
+```
+
+各子包 `__init__.py` 导出该子包的核心类，例如 `alignment/__init__.py`：
+```python
+from .mtb_alignment import MTBAlignment
+from .feature_alignment import FeatureAlignment
+```
 
 ## 算法清单
 
@@ -82,7 +117,7 @@ MTB 为默认对齐方法（速度快），特征点对齐为高精度备选。
 |---|---|---|
 | `ReinhardLocal` | Reinhard (2002) 局部 | 多尺度高斯中心-环绕自适应 |
 | `DurandToneMap` | Durand & Dorsey (2002) | 双边滤波分离基础/细节层 |
-| `FattalToneMap` | Fattal (2002) | 梯度域衰减 + 泊松重建 |
+| `FattalToneMap` | Fattal (2002) | 梯度域衰减 + 泊松重建（使用 scipy.sparse.linalg.spsolve，大图像自动降采样） |
 
 #### 4.3 感知驱动算子 (perceptual_operators.py)
 
@@ -164,9 +199,10 @@ class HDRPipeline:
             images: list of numpy arrays (BGR, uint8)
             exposure_times: list of float (秒)
         Returns:
-            ldr_result: 色调映射后的 LDR 图像 (uint8)
-            hdr_radiance_map: HDR 辐射图 (float32)
-            response_curve: 相机响应曲线
+            HDRResult (NamedTuple):
+                ldr_result: 色调映射后的 LDR 图像 (uint8)
+                hdr_radiance_map: HDR 辐射图 (float32)
+                response_curve: 相机响应曲线 (numpy array)
         """
 
     def exposure_fusion(self, images):
@@ -174,6 +210,14 @@ class HDRPipeline:
 
     def single_image_hdr(self, image):
         """单张图像 HDR 增强"""
+```
+
+### 返回值类型
+
+```python
+from collections import namedtuple
+
+HDRResult = namedtuple('HDRResult', ['ldr_result', 'hdr_radiance_map', 'response_curve'])
 ```
 
 ### 各算法类统一接口模式
@@ -187,8 +231,27 @@ class XxxAlgorithm:
         """手动 NumPy 实现（默认），含详细中文注释"""
 
     def process_opencv(self, *args):
-        """OpenCV 内置实现作为参考对比（如有对应方法）"""
+        """OpenCV 内置实现作为参考对比（如有对应方法）。
+        无 OpenCV 对应实现的算法（ACES、Filmic、Fattal、AdaptiveLog、HistogramToneMap）
+        调用 process_opencv() 时抛出 NotImplementedError 并提示使用 process()。"""
 ```
+
+### 色调映射方法名称映射
+
+`HDRPipeline` 的 `tone_mapping_method` 参数接受以下字符串值：
+
+| 字符串值 | 对应类 |
+|---|---|
+| `'reinhard_global'` | `ReinhardGlobal` |
+| `'reinhard_local'` | `ReinhardLocal` |
+| `'drago'` | `DragoToneMap` |
+| `'durand'` | `DurandToneMap` |
+| `'fattal'` | `FattalToneMap` |
+| `'adaptive_log'` | `AdaptiveLog` |
+| `'aces'` | `ACESToneMap` |
+| `'filmic'` | `FilmicToneMap` |
+| `'mantiuk'` | `MantiukToneMap` |
+| `'histogram'` | `HistogramToneMap` |
 
 ## 实现策略
 
@@ -196,7 +259,7 @@ class XxxAlgorithm:
 
 - `process()` — 手动 NumPy 实现，从数学公式出发，每一步附中文注释说明数学运算含义
 - `process_opencv()` — 调用 OpenCV 对应 API（`cv2.createMergeDebevec()`、`cv2.createTonemapReinhard()` 等），作为结果对比参考
-- 不是所有算法在 OpenCV 中都有对应实现（如 ACES、Filmic、Fattal），这些仅提供手动实现
+- 不是所有算法在 OpenCV 中都有对应实现（ACES、Filmic、Fattal、AdaptiveLog、HistogramToneMap），这些仅提供手动实现，`process_opencv()` 抛出 `NotImplementedError`
 
 ### 跨模块复用
 
@@ -216,6 +279,9 @@ python demo_hdr.py --images img1.jpg img2.jpg img3.jpg --exposures 0.033 0.25 1.
 
 # 模式3：单张图像 HDR
 python demo_hdr.py --single input.jpg
+
+# 模式4：色调映射算法对比（生成所有算法的并排对比网格图）
+python demo_hdr.py --compare
 ```
 
 ### 合成数据生成
@@ -270,7 +336,26 @@ python demo_hdr.py --single input.jpg
 
 ## 错误处理
 
-- 输入图像数量不足时抛出明确异常并提示最低要求
-- 曝光时间与图像数量不匹配时抛出 ValueError
-- 图像尺寸不一致时在对齐步骤自动处理或报错提示
+| 失败场景 | 异常类型 | 行为 |
+|---|---|---|
+| 输入图像少于 2 张（HDR 流程） | `ValueError` | 提示至少需要 2 张不同曝光图像 |
+| 曝光时间数量与图像数量不匹配 | `ValueError` | 提示数量必须一致 |
+| 图像尺寸不一致 | 对齐步骤自动处理 | 以第一张图像尺寸为基准裁剪/缩放 |
+| `exposure_fusion()` 传入单张图像 | `ValueError` | 提示至少需要 2 张图像 |
+| `tone_mapping_method` 字符串无效 | `ValueError` | 列出所有可用方法名称 |
+| `process_opencv()` 无 OpenCV 对应实现 | `NotImplementedError` | 提示该算法仅支持手动实现，请使用 `process()` |
+| Debevec SVD 求解失败（曝光差异不足） | `RuntimeError` | 提示输入图像曝光差异不足，建议增加曝光范围 |
+| HDR 合并时某像素位置所有曝光均饱和 | 退化处理 | 使用最接近中间曝光的像素值，记录 warning 日志 |
+| Fattal 泊松求解超出内存（大图像） | 自动降采样 | 图像尺寸超过 2048x2048 时自动 0.5x 降采样求解后上采样 |
+
+通用规则：
 - 使用 `logging` 模块输出各步骤进度，与现有模块一致
+- 所有异常消息使用英文（与现有模块一致），日志中文注释
+
+## .gitignore 更新
+
+在现有 `.gitignore` 中添加 `output_hdr/` 目录。
+
+## 文档关联
+
+在现有 `README_algorithms.md` 末尾添加指向 `README_HDR.md` 的链接，保持文档入口统一。
